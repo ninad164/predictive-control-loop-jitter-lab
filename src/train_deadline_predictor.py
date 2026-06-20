@@ -41,6 +41,7 @@ FEATURE_COLUMNS = [
     "memory_percent",
 ]
 TARGET_COLUMN = "deadline_miss"
+TIMESTAMP_COLUMN = "timestamp"
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,7 +67,7 @@ def load_runtime_logs(input_dir: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"No CSV files found in '{input_dir}'.")
 
     dataframes: list[pd.DataFrame] = []
-    required_columns = set(FEATURE_COLUMNS + [TARGET_COLUMN])
+    required_columns = set(FEATURE_COLUMNS + [TARGET_COLUMN, TIMESTAMP_COLUMN])
 
     for csv_file in csv_files:
         dataframe = pd.read_csv(csv_file)
@@ -77,6 +78,9 @@ def load_runtime_logs(input_dir: Path) -> pd.DataFrame:
                 f"CSV file '{csv_file}' is missing required columns: "
                 f"{missing_display}"
             )
+        dataframe = dataframe.copy()
+        dataframe[TIMESTAMP_COLUMN] = pd.to_datetime(dataframe[TIMESTAMP_COLUMN])
+        dataframe = dataframe.sort_values(TIMESTAMP_COLUMN).reset_index(drop=True)
         dataframes.append(dataframe)
 
     combined_dataframe = pd.concat(dataframes, ignore_index=True)
@@ -84,25 +88,38 @@ def load_runtime_logs(input_dir: Path) -> pd.DataFrame:
 
 
 def prepare_training_data(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
-    """Select features, encode the target, and drop incomplete rows."""
+    """Create one-step-ahead samples and drop incomplete rows.
 
-    prepared_dataframe = dataframe[FEATURE_COLUMNS + [TARGET_COLUMN]].copy()
+    The model uses telemetry features at timestep ``t`` to predict
+    ``deadline_miss`` at timestep ``t + 1``.
+    """
+
+    prepared_dataframe = dataframe[
+        [TIMESTAMP_COLUMN] + FEATURE_COLUMNS + [TARGET_COLUMN]
+    ].copy()
     prepared_dataframe[TARGET_COLUMN] = (
         prepared_dataframe[TARGET_COLUMN].astype(str).str.lower().map(
             {"true": 1, "false": 0}
         )
     )
+    prepared_dataframe = prepared_dataframe.sort_values(TIMESTAMP_COLUMN).reset_index(
+        drop=True
+    )
+    prepared_dataframe["next_deadline_miss"] = prepared_dataframe[TARGET_COLUMN].shift(
+        -1
+    )
+    prepared_dataframe = prepared_dataframe.iloc[:-1].copy()
     prepared_dataframe = prepared_dataframe.dropna()
 
     if prepared_dataframe.empty:
         raise ValueError("No valid samples remain after dropping missing values.")
-    if prepared_dataframe[TARGET_COLUMN].nunique() < 2:
+    if prepared_dataframe["next_deadline_miss"].nunique() < 2:
         raise ValueError(
             "Training data must contain both deadline miss and non-miss samples."
         )
 
     features = prepared_dataframe[FEATURE_COLUMNS]
-    target = prepared_dataframe[TARGET_COLUMN].astype(int)
+    target = prepared_dataframe["next_deadline_miss"].astype(int)
     return features, target
 
 
@@ -150,8 +167,8 @@ def save_confusion_matrix_plot(
 def save_feature_importance_plot(
     model: RandomForestClassifier,
     output_path: Path,
-) -> None:
-    """Save a feature importance bar chart for the trained Random Forest."""
+) -> pd.Series:
+    """Save a feature importance bar chart and return the ranked importances."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     importances = pd.Series(model.feature_importances_, index=FEATURE_COLUMNS)
@@ -168,6 +185,7 @@ def save_feature_importance_plot(
     figure.tight_layout()
     figure.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
+    return importances
 
 
 def main() -> None:
@@ -191,7 +209,9 @@ def main() -> None:
     DEFAULT_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, DEFAULT_MODEL_PATH)
     save_confusion_matrix_plot(y_test, y_pred, DEFAULT_CONFUSION_MATRIX_PATH)
-    save_feature_importance_plot(model, DEFAULT_FEATURE_IMPORTANCE_PATH)
+    feature_importances = save_feature_importance_plot(
+        model, DEFAULT_FEATURE_IMPORTANCE_PATH
+    )
 
     print(f"Number of samples: {len(features)}")
     print(f"Number of deadline misses: {int(target.sum())}")
@@ -203,6 +223,12 @@ def main() -> None:
     print(matrix)
     print("Classification report:")
     print(report)
+    print("Feature Importance:")
+    for rank, (feature_name, importance) in enumerate(
+        feature_importances.items(),
+        start=1,
+    ):
+        print(f"{rank}. {feature_name} : {importance:.2f}")
 
 
 if __name__ == "__main__":

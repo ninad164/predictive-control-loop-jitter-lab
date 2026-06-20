@@ -1,8 +1,8 @@
-"""Baseline runtime benchmark for a simulated robotics control loop.
+"""Runtime benchmark for an EKF-based robotics control loop.
 
-This module runs a simple periodic loop, records execution metrics, and exports
-the results to CSV for later analysis. It intentionally uses a lightweight
-NumPy computation as a stand-in for future EKF or control workload logic.
+This module runs a periodic loop around the EKF core simulation, records
+runtime and filter-quality metrics, and exports the results to CSV for later
+analysis.
 """
 
 from __future__ import annotations
@@ -21,6 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from src.ekf_core import (
+    calc_input,
+    compute_position_error,
+    covariance_trace,
+    ekf_estimation,
+    observation,
+)
 from src.metrics_logger import RuntimeMetricsLogger
 from src.stress_injector import StressInjector
 
@@ -114,15 +121,6 @@ def resolve_output_path(output: str | None, stress_mode: str) -> str:
     return f"data/runtime_logs/runtime_log_{stress_mode}.csv"
 
 
-def simulate_computation(stress_injector: StressInjector) -> None:
-    """Run a small deterministic NumPy workload and optional stress."""
-
-    state_vector = np.linspace(0.0, 1.0, 512, dtype=np.float64)
-    transition_matrix = np.eye(512, dtype=np.float64)
-    _ = transition_matrix @ state_vector
-    stress_injector.apply()
-
-
 def run_benchmark(
     duration_seconds: float,
     target_period_ms: float,
@@ -136,11 +134,23 @@ def run_benchmark(
     benchmark_start_time = time.perf_counter()
     benchmark_end_time = benchmark_start_time + duration_seconds
     next_iteration_time = benchmark_start_time
+    x_est = np.zeros((4, 1))
+    x_true = np.zeros((4, 1))
+    p_est = np.eye(4)
+    x_dr = np.zeros((4, 1))
 
     while time.perf_counter() < benchmark_end_time:
         logger.start_iteration()
-        simulate_computation(stress_injector)
-        logger.end_iteration()
+        u = calc_input()
+        x_true, z, x_dr, ud = observation(x_true, x_dr, u)
+        stress_injector.apply()
+        x_est, p_est = ekf_estimation(x_est, p_est, z, ud)
+        position_error_m = compute_position_error(x_est, x_true)
+        covariance_trace_value = covariance_trace(p_est)
+        logger.end_iteration(
+            position_error_m=position_error_m,
+            covariance_trace=covariance_trace_value,
+        )
 
         next_iteration_time += target_period_seconds
         current_time = time.perf_counter()
@@ -152,7 +162,7 @@ def run_benchmark(
 
 
 def print_summary(logger: RuntimeMetricsLogger, stress_mode: str) -> None:
-    """Print a concise summary of benchmark results."""
+    """Print runtime and EKF quality summary statistics."""
 
     metrics = logger.metrics
     total_iterations = len(metrics)
@@ -164,6 +174,16 @@ def print_summary(logger: RuntimeMetricsLogger, stress_mode: str) -> None:
         if metric.loop_period_ms is not None
     ]
     jitters = [metric.jitter_ms for metric in metrics if metric.jitter_ms is not None]
+    position_errors = [
+        metric.position_error_m
+        for metric in metrics
+        if metric.position_error_m is not None
+    ]
+    covariance_traces = [
+        metric.covariance_trace
+        for metric in metrics
+        if metric.covariance_trace is not None
+    ]
     deadline_misses = sum(metric.deadline_miss for metric in metrics)
     deadline_miss_percentage = (
         (deadline_misses / total_iterations) * 100.0 if total_iterations else 0.0
@@ -172,6 +192,9 @@ def print_summary(logger: RuntimeMetricsLogger, stress_mode: str) -> None:
     average_execution_time = mean(execution_times) if execution_times else 0.0
     average_loop_period = mean(loop_periods) if loop_periods else 0.0
     average_jitter = mean(jitters) if jitters else 0.0
+    average_position_error = mean(position_errors) if position_errors else 0.0
+    max_position_error = max(position_errors) if position_errors else 0.0
+    average_covariance_trace = mean(covariance_traces) if covariance_traces else 0.0
 
     print(f"Stress mode: {stress_mode}")
     print(f"Total iterations: {total_iterations}")
@@ -180,6 +203,9 @@ def print_summary(logger: RuntimeMetricsLogger, stress_mode: str) -> None:
     print(f"Average jitter: {average_jitter:.3f} ms")
     print(f"Number of deadline misses: {deadline_misses}")
     print(f"Deadline miss percentage: {deadline_miss_percentage:.2f}%")
+    print(f"Average position error: {average_position_error:.3f} m")
+    print(f"Max position error: {max_position_error:.3f} m")
+    print(f"Average covariance trace: {average_covariance_trace:.3f}")
 
 
 def main() -> None:

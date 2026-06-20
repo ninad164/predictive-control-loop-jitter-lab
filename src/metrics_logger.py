@@ -28,6 +28,8 @@ class RuntimeMetric:
     cpu_percent: float
     memory_percent: float
     deadline_miss: bool
+    position_error_m: Optional[float] = None
+    covariance_trace: Optional[float] = None
 
 
 class RuntimeMetricsLogger:
@@ -88,8 +90,16 @@ class RuntimeMetricsLogger:
         self._active_iteration_timestamp = datetime.now(timezone.utc).isoformat()
         self._active_iteration_start_perf = time.perf_counter()
 
-    def end_iteration(self) -> RuntimeMetric:
+    def end_iteration(
+        self,
+        position_error_m: Optional[float] = None,
+        covariance_trace: Optional[float] = None,
+    ) -> RuntimeMetric:
         """Mark the end of the active loop iteration and store its metrics.
+
+        Args:
+            position_error_m: Optional EKF position error for this iteration.
+            covariance_trace: Optional trace of the EKF covariance matrix.
 
         Returns:
             The recorded metric for the completed iteration.
@@ -127,6 +137,8 @@ class RuntimeMetricsLogger:
             cpu_percent=cpu_percent,
             memory_percent=memory_percent,
             deadline_miss=deadline_miss,
+            position_error_m=position_error_m,
+            covariance_trace=covariance_trace,
         )
         self._metrics.append(metric)
 
@@ -154,6 +166,8 @@ class RuntimeMetricsLogger:
             "cpu_percent",
             "memory_percent",
             "deadline_miss",
+            "position_error_m",
+            "covariance_trace",
         ]
 
         with destination.open("w", newline="", encoding="utf-8") as csv_file:
