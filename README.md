@@ -217,6 +217,40 @@ python src/evaluate_predictor.py --input data/runtime_logs/ekf_runtime_log_mixed
 | 4 | `cpu_percent` | 0.09 |
 | 5 | `memory_percent` | 0.03 |
 
+## Results and Visualizations
+
+Generated result artifacts are excluded from Git by default, but selected representative plots are tracked for documentation.
+
+### Deadline Miss Rate Across Stress Modes
+
+![Deadline miss comparison](results/plots/deadline_miss_comparison.png)
+
+This plot shows the control loop remains stable in nominal conditions and degrades sharply under injected load, especially under `cpu_stress`. Technically, it demonstrates that the benchmark is producing clear separation between operating regimes, which is important for both runtime validation and supervised learning.
+
+### Loop Jitter Under Stress
+
+![Jitter comparison](results/plots/jitter_comparison.png)
+
+The jitter comparison highlights how timing variability spreads under stress rather than simply shifting the mean period. This is useful because deadline risk in robotics often comes from distribution widening and burstiness, not only average latency drift.
+
+### Execution Time Distribution
+
+![Execution time comparison](results/plots/execution_time_comparison.png)
+
+The execution-time distributions show that stressed scenarios produce longer and heavier-tailed loop runtimes. This provides direct evidence that the framework is measuring workload-induced compute pressure rather than only scheduler noise.
+
+### Random Forest Confusion Matrix
+
+![Deadline predictor confusion matrix](results/plots/deadline_predictor_confusion_matrix.png)
+
+The confusion matrix shows that the next-cycle predictor captures most deadline misses while keeping false positives low. Technically, it validates that runtime telemetry contains enough signal to support predictive monitoring instead of purely reactive detection.
+
+### Feature Importance
+
+![Random Forest feature importance](results/plots/feature_importance_random_forest.png)
+
+The feature-importance ranking shows that loop execution time, loop period, and jitter dominate prediction quality, while CPU and memory are secondary signals. This supports the conclusion that immediate timing behavior is the strongest precursor to a missed deadline in the current benchmark design.
+
 ## Interpretation
 
 - The nominal EKF run holds the 100 ms target period with zero deadline misses, which validates the fixed-rate scheduler and baseline instrumentation.
