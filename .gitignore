@@ -45,3 +45,8 @@ results/reports/*.pdf
 
 # Logs
 *.log
+
+# venv
+venv/
+.venv/
+*.pyc
